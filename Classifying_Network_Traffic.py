@@ -186,6 +186,12 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_imputed)
 
 # %%
+import joblib
+
+joblib.dump(imputer, "imputer.pkl")
+joblib.dump(scaler, "scaler.pkl")
+
+# %%
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cluster import KMeans
@@ -310,6 +316,12 @@ feature_mapping = {f"f{i}": name for i, name in enumerate(feature_names)}
 print(feature_mapping)
 
 # %%
+import joblib
+
+features = df.drop("Label", axis=1).columns.tolist()
+joblib.dump(features, "features.pkl")
+
+# %%
 import pandas as pd
 
 # Get importance scores
@@ -365,6 +377,22 @@ autoencoder = Sequential([encoder, decoder])
 autoencoder.compile(optimizer='adam', loss='mse')
 
 # %%
+# Train
+history = autoencoder.fit(
+    X_scaled, X_scaled,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.1,
+    verbose=1
+)
+
+# Save trained autoencoder
+autoencoder.save("Classifying_Network_Traffic.keras")
+
+# Optionally save encoder separately if you want feature embeddings
+encoder.save("Traffic_Encoder.keras")
+
+# %%
 import shap
 
 # Sample data for SHAP background and explanation
@@ -377,48 +405,65 @@ shap_values = explainer.shap_values(X_test_sample)
 shap.summary_plot(shap_values, X_test_sample)
 
 # %%
-import joblib
-joblib.dump(autoencoder, "Classifying_Network_Traffic.keras")
-
-# %%
 import streamlit as st
 from tensorflow.keras.models import load_model
 
 # Load trained model
-model = load_model("Classifying_Network_Traffic.keras")
-
-model.save("Classifying_Network_Traffic.keras")
-
-# %%
-st.title("Network Traffic Anomaly Detector")
-
-# Add input fields based on top features
-destination_port = st.number_input("Destination Port")
-init_win_fwd = st.number_input("Init Win Bytes Forward")
-flow_duration = st.number_input("Flow Duration")
-flow_iat_min = st.number_input("Flow IAT Min")
-init_win_bwd = st.number_input("Init Win Bytes Backward")
-flow_bytes_per_sec = st.number_input("Flow Bytes/s")
+imputer = joblib.load("imputer.pkl")
+scaler = joblib.load("scaler.pkl")
+model = load_model("Classifying_Network_Traffic.keras", compile=False)
 
 # %%
-# Prediction
+df.head()
+
+# %%
+# Ordered feature names
+features = [
+    "Destination Port", "Flow Duration", "Total Fwd Packets", "Total Backward Packets",
+    "Total Length of Fwd Packets", "Total Length of Bwd Packets",
+    "Fwd Packet Length Max", "Fwd Packet Length Min", "Fwd Packet Length Mean", "Fwd Packet Length Std",
+    "Bwd Packet Length Max", "Bwd Packet Length Min", "Bwd Packet Length Mean", "Bwd Packet Length Std",
+    "Flow Bytes/s", "Flow Packets/s", "Flow IAT Mean", "Flow IAT Std", "Flow IAT Max", "Flow IAT Min",
+    "Fwd IAT Total", "Fwd IAT Mean", "Fwd IAT Std", "Fwd IAT Max", "Fwd IAT Min",
+    "Bwd IAT Total", "Bwd IAT Mean", "Bwd IAT Std", "Bwd IAT Max", "Bwd IAT Min",
+    "Fwd PSH Flags", "Bwd PSH Flags", "Fwd URG Flags", "Bwd URG Flags",
+    "Fwd Header Length", "Bwd Header Length", "Fwd Packets/s", "Bwd Packets/s",
+    "Min Packet Length", "Max Packet Length", "Packet Length Mean", "Packet Length Std", "Packet Length Variance",
+    "FIN Flag Count", "SYN Flag Count", "RST Flag Count", "PSH Flag Count", "ACK Flag Count", "URG Flag Count",
+    "CWE Flag Count", "ECE Flag Count", "Down/Up Ratio", "Average Packet Size",
+    "Avg Fwd Segment Size", "Avg Bwd Segment Size", "Fwd Header Length",
+    "Fwd Avg Bytes/Bulk", "Fwd Avg Packets/Bulk", "Fwd Avg Bulk Rate",
+    "Bwd Avg Bytes/Bulk", "Bwd Avg Packets/Bulk", "Bwd Avg Bulk Rate",
+    "Subflow Fwd Packets", "Subflow Fwd Bytes", "Subflow Bwd Packets", "Subflow Bwd Bytes",
+    "Init_Win_bytes_forward", "Init_Win_bytes_backward", "act_data_pkt_fwd", "min_seg_size_forward",
+    "Active Mean", "Active Std", "Active Max", "Active Min",
+    "Idle Mean", "Idle Std", "Idle Max", "Idle Min"
+]
+
+st.title("🚦 Network Traffic Classification")
+
+# Collect user input
+user_input = []
+for feat in features:
+    val = st.number_input(f"{feat}", value=0.0)
+    user_input.append(val)
+
 if st.button("Predict"):
-    features = np.array([[destination_port, init_win_fwd, flow_duration, flow_iat_min,
-                          init_win_bwd, flow_bytes_per_sec]])
-    
-    reconstructed = model.predict(features)
-    mse = np.mean(np.power(features - reconstructed, 2))
+    # Convert to DataFrame with correct order
+    df_input = pd.DataFrame([user_input], columns=features)
 
-    threshold = 0.01
+    # Impute missing, scale, and predict
+    X = imputer.transform(df_input)
+    X_scaled = scaler.transform(X)
+    reconstructed = model.predict(X_scaled)
+    mse = np.mean(np.power(X_scaled - reconstructed, 2))
+
+    st.write(f"Reconstruction error (MSE): {mse:.6f}")
+    threshold = 0.01  # <- adjust this based on validation
     if mse > threshold:
-        st.write("🔍 Prediction:", "❗ Anomaly Detected")
+        st.error("🚨 Anomalous Traffic Detected")
     else:
-        st.write("🔍 Prediction:", "✅ Benign")
-
-# %%
-del model
-import gc
-gc.collect()
+        st.success("✅ Normal Traffic")
 
 # %%
 
